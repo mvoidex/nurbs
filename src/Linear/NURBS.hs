@@ -7,10 +7,12 @@ module Linear.NURBS (
 	knotSpans, growSpans, fallSpans,
 	KnotData(..), knotData, makeData, iterData, evalData,
 	basis, rbasis,
-	NURBS(..), eval, uniformKnot, degree, wpoints, knotVector, iknotVector, knotSpan, normalizeKnot, nurbs, wnurbs,
+	NURBS(..), eval, uniformKnot, degree, wpoints, points, knotVector, iknotVector, knotSpan, normalizeKnot, nurbs, wnurbs,
 	insertKnot, insertKnots, appendPoint, prependPoint, split, cut, removeKnot, removeKnot_, removeKnots, purgeKnots,
 	ndist, SimEq(..),
-	joint, (⊕)
+	joint, (⊕),
+
+	pline, circle,
 	) where
 
 import Prelude.Unicode
@@ -22,6 +24,7 @@ import Data.Maybe (fromMaybe)
 import Linear.Vector hiding (basis)
 import Linear.Affine
 import Linear.Metric
+import Linear.V2
 
 binomial ∷ Integral a ⇒ a → a → a
 binomial n k
@@ -162,6 +165,12 @@ rbasis ws knot i n u = (dat ^?! knotData . ix i . _2) * (ws ^?! ix i) / sum (zip
 
 data NURBS f a = NURBS [Weight f a] [a] deriving (Eq, Ord, Read, Show)
 
+instance Functor f ⇒ Functor (NURBS f) where
+	fmap f (NURBS pts k) = NURBS (map (fmap f) pts) (map f k)
+
+instance Foldable f ⇒ Foldable (NURBS f) where
+	foldMap f (NURBS pts k) = mconcat (map (foldMap f) pts) `mappend` mconcat (map f k)
+
 -- | Evaluate nurbs point
 eval ∷ (Additive f, Ord a, Fractional a) ⇒ NURBS f a → a → f a
 eval n t = foldr (^+^) zero [rbasis ws knot i deg t *^ pt | (i, pt) ← zip [0..] pts] where
@@ -191,6 +200,9 @@ wpoints = lens fromn ton where
 	ton n@(NURBS wpts k) wpts'
 		| length wpts ≡ length wpts' = NURBS wpts' k
 		| otherwise = NURBS wpts' (uniformKnot (view degree n) (length wpts'))
+
+points ∷ (Additive f, Additive g, Fractional a) ⇒ Traversal (NURBS f a) (NURBS g a) (f a) (g a)
+points = wpoints . each . wpoint
 
 knotVector ∷ Eq a ⇒ Lens' (NURBS f a) [a]
 knotVector = lens fromn ton where
@@ -343,3 +355,22 @@ joint l r
 
 (⊕) ∷ (Ord a, Num a, Floating a, Foldable f, Metric f, SimEq (Weight f a), SimEq (NURBS f a)) ⇒ NURBS f a → NURBS f a → Maybe (NURBS f a)
 l ⊕ r = joint l r
+
+pline ∷ (Additive f, Fractional a) ⇒ [f a] → NURBS f a
+pline = nurbs 1
+
+circle ∷ (Eq a, Floating a) ⇒ V2 a → a → NURBS V2 a
+circle c r = over points move' $ set knotVector knot' $ wnurbs 2 [
+	V2 r 0 `ofWeight` 1,
+	V2 r r `ofWeight` sq,
+	V2 0 r `ofWeight` 1,
+	V2 (-r) r `ofWeight` sq,
+	V2 (-r) 0 `ofWeight` 1,
+	V2 (-r) (-r) `ofWeight` sq,
+	V2 0 (-r) `ofWeight` 1,
+	V2 r (-r) `ofWeight` sq,
+	V2 r 0 `ofWeight` 1]
+	where
+		sq = sqrt 2.0 / 2.0
+		knot' = [0, 0, 0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0]
+		move' pt = pt ^+^ c
