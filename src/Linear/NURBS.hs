@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeFamilies, TemplateHaskell, RankNTypes #-}
+{-# LANGUAGE TypeFamilies, TemplateHaskell, RankNTypes, MultiParamTypeClasses, FlexibleInstances, DefaultSignatures, FlexibleContexts, UndecidableInstances #-}
 
 module Linear.NURBS (
 	binomial, size,
@@ -8,7 +8,9 @@ module Linear.NURBS (
 	KnotData(..), knotData, makeData, iterData, evalData,
 	basis, rbasis,
 	NURBS(..), eval, uniformKnot, degree, wpoints, knotVector, iknotVector, knotSpan, normalizeKnot, nurbs, wnurbs,
-	insertKnot, insertKnots, appendPoint, prependPoint, split, cut, removeKnot, purgeKnots
+	insertKnot, insertKnots, appendPoint, prependPoint, split, cut, removeKnot, removeKnot_, removeKnots, purgeKnots,
+	ndist, SimEq(..),
+	joint, (⊕)
 	) where
 
 import Prelude.Unicode
@@ -19,6 +21,7 @@ import Data.List
 import Data.Maybe (fromMaybe)
 import Linear.Vector hiding (basis)
 import Linear.Affine
+import Linear.Metric
 
 binomial ∷ Integral a ⇒ a → a → a
 binomial n k
@@ -62,6 +65,9 @@ instance Affine f ⇒ Affine (Weight f) where
 
 instance Foldable f ⇒ Foldable (Weight f) where
 	foldMap f (Weight x w) = foldMap f x `mappend` f w
+
+instance Metric f ⇒ Metric (Weight f) where
+	dot (Weight lx lw) (Weight rx rw) = dot lx rx + lw * rw	
 
 data Span a = Span {
 	_spanStart ∷ a,
@@ -189,9 +195,9 @@ wpoints = lens fromn ton where
 knotVector ∷ Eq a ⇒ Lens' (NURBS f a) [a]
 knotVector = lens fromn ton where
 	fromn (NURBS _ k) = k
-	ton n@(NURBS wpts k) k'
+	ton n@(NURBS wpts _) k'
 		| length k' > length wpts * 2 ∨ length k' < length wpts + 2 = n
-		| allSame (take (succ deg') k') ∧ allSame (take (succ deg') $ reverse k') = NURBS wpts k
+		| allSame (take (succ deg') k') ∧ allSame (take (succ deg') $ reverse k') = NURBS wpts k'
 		| otherwise = n
 		where
 			deg' = length k' - length wpts - 1
@@ -209,8 +215,8 @@ iknotVector = lens fromn ton where
 knotSpan ∷ (Eq a, Fractional a) ⇒ Lens' (NURBS f a) (Span a)
 knotSpan = lens fromn ton where
 	fromn (NURBS _ k) = rangeSpan k
-	ton (NURBS wpts k) s = NURBS wpts (map (view norm) k) where
-		norm = coords (rangeSpan k) ∘ from (coords s)
+	ton (NURBS wpts k) s = NURBS wpts (map (view norm') k) where
+		norm' = coords (rangeSpan k) ∘ from (coords s)
 
 normalizeKnot ∷ (Eq a, Fractional a) ⇒ NURBS f a → NURBS f a
 normalizeKnot = set knotSpan (Span 0 1)
@@ -226,11 +232,11 @@ wnurbs deg pts = NURBS pts (uniformKnot deg (length pts))
 -- | Insert knot
 insertKnot ∷ (Additive f, Ord a, Fractional a) ⇒ a → NURBS f a → NURBS f a
 insertKnot u n
-	| u ≤ head (view knotVector n) ∨ u ≥ last (view knotVector n) = error "Invalid knot value"
-	| otherwise = NURBS qs (sort $ u : view knotVector n)
+	| u ≤ head (n ^. knotVector) ∨ u ≥ last (n ^. knotVector) = error "Invalid knot value"
+	| otherwise = NURBS qs (sort $ u : (n ^. knotVector))
 	where
-		wpts = view wpoints n
-		fs = map (fall u) $ fallSpans (view degree n) (view knotVector n)
+		wpts = n ^. wpoints
+		fs = map (fall u) $ fallSpans (n ^. degree) (n ^. knotVector)
 		qs = [head wpts] ++ zipWith3 lerp fs wpts (tail wpts) ++ [last wpts]
 
 -- | Insert knots
@@ -264,23 +270,76 @@ cut ∷ (Additive f, Ord a, Fractional a) ⇒ Span a → NURBS f a → NURBS f a
 cut (Span l h) = snd ∘ split l ∘ fst ∘ split h
 
 -- | Remove knot
-removeKnot ∷ (Foldable f, Additive f, Ord a, Floating a) ⇒ a → NURBS f a → Maybe (NURBS f a)
+removeKnot ∷ (Foldable f, Additive f, Ord a, Floating a, SimEq (NURBS f a)) ⇒ a → NURBS f a → Maybe (NURBS f a)
 removeKnot u n
-	| size (negated (last pts) ^+^ last (init pts)) / size (last (init pts)) ≤ 1e-4 = Just $ NURBS (init (init pts) ++ [last wpts]) knots'
+	| n' ≃ n = Just n'
 	| otherwise = Nothing
 	where
-		knots' = delete u $ view knotVector n
-		fs = map (fall u) $ fallSpans (view degree n) knots'
-		hs = 1 : [1 `safeDiv` (1 - f) | f ← fs]
-		wpts = view wpoints n
+		n' = NURBS (pts ++ drop (succ $ length pts) wpts) knots'
+		knots' = delete u $ n ^. knotVector
+		fs = map (fall u) $ fallSpans (n ^. degree) knots'
+		hs = takeWhile (> 0.0) $ 1 : [inv (1 - f) | f ← fs]
+		wpts = n ^. wpoints
 		pts = zipWith eval' qs hs_ where
 			qs = tail (inits wpts)
 			hs_ = tail (inits hs)
 			eval' qs' hs' = foldr (^+^) zero $ zipWith (*^) (map h' (tails hs')) qs'
 			h' [] = error "Impossible"
 			h' (hi : his) = hi * product [1 - hk | hk ← his]
+		inv 0.0 = 0.0
+		inv x = 1.0 / x
+
+-- | Try remove knot
+removeKnot_ ∷ (Foldable f, Additive f, Ord a, Floating a, SimEq (NURBS f a)) ⇒ a → NURBS f a → NURBS f a
+removeKnot_ u n = fromMaybe n $ removeKnot u n
+
+-- | Remove knots
+removeKnots ∷ (Foldable f, Additive f, Ord a, Floating a, SimEq (NURBS f a)) ⇒ [(Int, a)] → NURBS f a → NURBS f a
+removeKnots iu n = foldr ($) n $ concat [replicate i (removeKnot_ u) | (i, u) ← iu]
 
 -- | Try remove knots
-purgeKnots ∷ (Foldable f, Additive f, Ord a, Floating a) ⇒ NURBS f a → NURBS f a
-purgeKnots n = foldr ($) n [removeKnot' u | u ← n ^. iknotVector] where
-	removeKnot' u' n' = fromMaybe n' $ removeKnot u' n'
+purgeKnots ∷ (Foldable f, Additive f, Ord a, Floating a, SimEq (NURBS f a)) ⇒ NURBS f a → NURBS f a
+purgeKnots n = foldr ($) n [removeKnot_ u | u ← n ^. iknotVector] where
+
+ndist ∷ (Metric f, Ord a, Floating a) ⇒ f a → f a → a
+ndist l r = distance l r / sqrt (max (norm l) (norm r))
+
+class SimEq a where
+	(≃) ∷ a → a → Bool
+	x ≃ y = not (x ≄ y)
+	(≄) ∷ a → a → Bool
+	x ≄ y = not (x ≃ y)
+
+instance SimEq a ⇒ SimEq (Maybe a) where
+	Just x ≃ Just y = x ≃ y
+	_ ≃ _ = False
+
+instance {-# OVERLAPPABLE #-} (Ord a, Floating a) ⇒ SimEq a where
+	x ≃ y = abs (x - y) ≤ 1e-6 * max x y
+
+instance {-# OVERLAPPABLE #-} (Metric f, Ord a, Floating a, SimEq a) ⇒ SimEq (f a) where
+	x ≃ y = distance x y ≤ 1e-6 * max (norm x) (norm y)
+
+instance {-# OVERLAPS #-} (Metric f, Ord a, Floating a, SimEq a) ⇒ SimEq (Weight f a) where
+	x ≃ y = distance x y ≤ 1e-6 * max (norm x) (norm y)
+
+instance (Metric f, Ord a, Floating a, SimEq (f a)) ⇒ SimEq (NURBS f a) where
+	x ≃ y = dt ≤ 1e-6 * max (norm' x) (norm' y) where
+		dt = sum $ map norm $ zipWith (^-^)
+			(map (eval x) $ u ^.. each . from (coords (x ^. knotSpan)))
+			(map (eval y) $ u ^.. each . from (coords (y ^. knotSpan)))
+		u = map ((/ fromIntegral i) ∘ fromIntegral) [0 .. i]
+		i = max (length (x ^. wpoints)) (length (y ^. wpoints)) * 4
+		norm' n = maximum $ map norm (n ^. wpoints)
+
+joint ∷ (Ord a, Num a, Floating a, Foldable f, Metric f, SimEq (Weight f a), SimEq (NURBS f a)) ⇒ NURBS f a → NURBS f a → Maybe (NURBS f a)
+joint l r
+	| (l ^?! wpoints . _last) ≃ (r ^?! wpoints . _head) ∧ (l ^. degree ≡ r ^. degree) = Just $ purgeKnots $ NURBS ((l ^. wpoints) ++ (r ^. wpoints . _tail)) knots'
+	| otherwise = Nothing
+	where
+		knots' = (l ^. knotVector . _init) ++ over mapped moveKnot (r ^.. knotVector . _tail . dropping deg' each)
+		deg' = l ^. degree
+		moveKnot k = k - (r ^?! knotVector . _head) + (l ^?! knotVector . _last)
+
+(⊕) ∷ (Ord a, Num a, Floating a, Foldable f, Metric f, SimEq (Weight f a), SimEq (NURBS f a)) ⇒ NURBS f a → NURBS f a → Maybe (NURBS f a)
+l ⊕ r = joint l r
