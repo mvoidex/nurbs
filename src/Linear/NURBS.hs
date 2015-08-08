@@ -1,18 +1,19 @@
-{-# LANGUAGE TypeFamilies, TemplateHaskell, RankNTypes, MultiParamTypeClasses, FlexibleInstances, DefaultSignatures, FlexibleContexts, UndecidableInstances #-}
+{-# LANGUAGE TypeFamilies, RankNTypes, MultiParamTypeClasses, FlexibleInstances, DefaultSignatures, FlexibleContexts, UndecidableInstances #-}
 
 module Linear.NURBS (
 	binomial, size,
-	Weight(..), ofWeight, weight, wpoint,
-	Span(..), spanStart, spanEnd, spanId, grow, fall, coords, rangeSpan, mergeSpan,
+	spanId, spanEmpty, spanLength, inSpan, grow, fall, coords, rangeSpan, mergeSpan,
 	knotSpans, growSpans, fallSpans,
-	KnotData(..), knotData, makeData, iterData, evalData,
+	dataSpan, makeData, iterData, evalData,
 	basis, rbasis,
-	NURBS(..), eval, uniformKnot, degree, wpoints, points, knotVector, iknotVector, knotSpan, normalizeKnot, nurbs, wnurbs,
-	insertKnot, insertKnots, appendPoint, prependPoint, split, cut, removeKnot, removeKnot_, removeKnots, purgeKnot, purgeKnots,
+	eval, uniformKnot, cycleKnot, periodic, degree, wpoints, points, knotVector, iknotVector, knotSpan, normalizeKnot, nurbs, wnurbs,
+	insertKnot, insertKnots, appendPoint, prependPoint, split, cut, breakLoop, removeKnot, removeKnot_, removeKnots, purgeKnot, purgeKnots,
 	ndist, SimEq(..),
 	joint, (⊕),
 
 	pline, circle,
+
+	module Linear.NURBS.Types
 	) where
 
 import Prelude.Unicode
@@ -22,9 +23,10 @@ import Control.Lens
 import Data.List
 import Data.Maybe (fromMaybe)
 import Linear.Vector hiding (basis)
-import Linear.Affine
 import Linear.Metric
 import Linear.V2
+
+import Linear.NURBS.Types
 
 binomial ∷ Integral a ⇒ a → a → a
 binomial n k
@@ -34,64 +36,24 @@ binomial n k
 size ∷ (Additive f, Floating a, Foldable f) ⇒ f a → a
 size = sqrt ∘ sum ∘ fmap (^ (2 ∷ Integer))
 
-data Weight f a = Weight (f a) a deriving (Eq, Ord, Read, Show)
-
-ofWeight ∷ Additive f ⇒ f a → a → Weight f a
-pt `ofWeight` w = Weight pt w
-
-weight ∷ (Additive f, Fractional a) ⇒ Lens' (Weight f a) a
-weight = lens fromw tow where
-	fromw (Weight _ w) = w
-	tow (Weight pt w) w' = Weight ((w' / w) *^ pt) w'
-
-wpoint ∷ (Additive f, Additive g, Fractional a) ⇒ Lens (Weight f a) (Weight g a) (f a) (g a)
-wpoint = lens fromw tow where
-	fromw (Weight pt w) = (1.0 / w) *^ pt
-	tow (Weight _ w) pt' = Weight (w *^ pt') w
-
-instance Functor f ⇒ Functor (Weight f) where
-	fmap f (Weight pt w) = Weight (fmap f pt) (f w)	
-
-instance Additive f ⇒ Additive (Weight f) where
-	zero = Weight zero 0
-	Weight lx lw ^+^ Weight rx rw = Weight (lx ^+^ rx) (lw + rw)
-	Weight lx lw ^-^ Weight rx rw = Weight (lx ^-^ rx) (lw - rw)
-	lerp a (Weight lx lw) (Weight rx rw) = Weight (lerp a lx rx) (a * lw + (1 - a) * rw)
-	liftU2 f (Weight lx lw) (Weight rx rw) = Weight (liftU2 f lx rx) (f lw rw)
-	liftI2 f (Weight lx lw) (Weight rx rw) = Weight (liftI2 f lx rx) (f lw rw)
-
-instance Affine f ⇒ Affine (Weight f) where
-	type Diff (Weight f) = Weight (Diff f)
-	Weight lx lw .-. Weight rx rw = Weight (lx .-. rx) (lw - rw)
-	Weight lx lw .+^ Weight x w = Weight (lx .+^ x) (lw + w)
-	Weight lx lw .-^ Weight x w = Weight (lx .-^ x) (lw - w)
-
-instance Foldable f ⇒ Foldable (Weight f) where
-	foldMap f (Weight x w) = foldMap f x `mappend` f w
-
-instance Metric f ⇒ Metric (Weight f) where
-	dot (Weight lx lw) (Weight rx rw) = dot lx rx + lw * rw	
-
-data Span a = Span {
-	_spanStart ∷ a,
-	_spanEnd ∷ a }
-		deriving (Eq, Ord, Read)
-
-instance Show a ⇒ Show (Span a) where
-	show (Span s e) = show (s, e)
-
 -- | Piecewise constant function, returns 1 in span, 0 otherwise
 spanId ∷ (Ord a, Num a) ⇒ a → Span a → a
-spanId u (Span s e)
-	| s ≤ u ∧ u ≤ e = 1
+spanId u s
+	| u `inSpan` s = 1
 	| otherwise = 0
+
+spanEmpty ∷ Eq a ⇒ Span a → Bool
+spanEmpty (Span s e) = s ≡ e
+
+inSpan ∷ Ord a ⇒ a → Span a → Bool
+x `inSpan` Span s e = x ≥ s ∧ x ≤ e
+
+spanLength ∷ Num a ⇒ Span a → a
+spanLength (Span s e) = e - s
 
 safeDiv ∷ (Eq a, Fractional a) ⇒ a → a → a
 safeDiv _ 0.0 = 0.0
 safeDiv x y = x / y
-
-tailsOf ∷ Int → [a] → [[a]]
-tailsOf n = filter ((≡ n) ∘ length) ∘ map (take n) ∘ tails
 
 -- | Grow within span from 0 to 1
 grow ∷ (Ord a, Fractional a) ⇒ a → Span a → a
@@ -105,13 +67,18 @@ grow u (Span l h)
 fall ∷ (Ord a, Fractional a) ⇒ a → Span a → a
 fall u s = 1 - grow u s
 
+-- | Grop within span from 0 to 1, periodic
+cycleGrow ∷ (Ord a, Fractional a) ⇒ a → a → Span a → a
+cycleGrow per u s = grow (until (≥ (s ^. spanStart)) (+ per) u) s
+
+cycleFall ∷ (Ord a, Fractional a) ⇒ a → a → Span a → a
+cycleFall per u s = fall (until (≥ (s ^. spanStart)) (+ per) u) s
+
 -- | Map value to span coordinates, span start mapped to 0, end to 1
 coords ∷ (Eq a, Fractional a) ⇒ Span a → Iso' a a
 coords (Span s e) = iso fromc toc where
 	fromc u = (u - s) `safeDiv` (e - s)
 	toc u' = (u' * (e - s)) + s
-
-makeLenses ''Span
 
 -- | Make span from knot vector
 rangeSpan ∷ [a] → Span a
@@ -122,33 +89,34 @@ mergeSpan ∷ Ord a ⇒ Span a → Span a → Span a
 mergeSpan l r = Span (min (_spanStart l) (_spanStart r)) (max (_spanEnd l) (_spanEnd r))
 
 -- | Generate knot spans of degree
-knotSpans ∷ Int → [a] → [Span a]
-knotSpans d = map rangeSpan ∘ tailsOf (d + 2)
+knotSpans ∷ Num a ⇒ Int → [a] → [Span a]
+knotSpans n k = foldr ($) (zipWith Span k (tail k)) (replicate n merge') where
+	merge' s = zipWith mergeSpan' s (tail s ++ [over traversed (+ _spanEnd sp) $ head s])
+	mergeSpan' l r = Span (_spanStart l) (_spanEnd r)
+	sp = rangeSpan k
 
 -- | Generate drow spans of degree
-growSpans ∷ Int → [a] → [Span a]
+growSpans ∷ Num a ⇒ Int → [a] → [Span a]
 growSpans d = knotSpans (pred d) ∘ init
 
 -- | Generate fall spans of degree
-fallSpans ∷ Int → [a] → [Span a]
+fallSpans ∷ Num a ⇒ Int → [a] → [Span a]
 fallSpans d = knotSpans (pred d) ∘ tail
 
--- | Knot evaluation data
-data KnotData a = KnotData a [(Span a, a)] deriving (Eq, Ord, Read, Show)
-
-knotData ∷ Lens' (KnotData a) [(Span a, a)]
-knotData = lens fromk tok where
-	fromk (KnotData _ d) = d
-	tok (KnotData u _) = KnotData u
+dataSpan ∷ (Eq a, Fractional a) ⇒ Lens' (KnotData a) (Span a)
+dataSpan = lens fromk tok where
+	fromk (KnotData _ s _) = s
+	tok (KnotData u s d) s' = KnotData (scale u) s' (map (fmap scale *** scale) d) where
+		scale x = x ^. coords s . from (coords s')
 
 -- | Make initial knot data
 makeData ∷ (Ord a, Num a) ⇒ [a] → a → KnotData a
-makeData knot u = KnotData u $ map (id &&& spanId u) $ knotSpans 0 knot
+makeData knot u = KnotData u (rangeSpan knot) $ map (id &&& spanId u) $ knotSpans 0 knot
 
 -- | Eval basis function for next degree
 iterData ∷ (Ord a, Fractional a) ⇒ KnotData a → KnotData a
-iterData (KnotData u vs) = KnotData u $ zipWith mergeSpans vs (tail vs) where
-	mergeSpans (ls, l) (rs, r) = (mergeSpan ls rs, grow u ls * l + fall u rs * r)
+iterData (KnotData u s vs) = KnotData u s $ zipWith mergeSpans vs (tail vs ++ [over (_1 . traversed) (+ _spanEnd s) $ head vs]) where
+	mergeSpans (ls, l) (rs, r) = (mergeSpan ls rs, cycleGrow (spanLength s) u ls * l + cycleFall (spanLength s) u rs * r)
 
 -- | Eval for n degree
 evalData ∷ (Ord a, Fractional a) ⇒ Int → KnotData a → KnotData a
@@ -163,14 +131,6 @@ rbasis ∷ (Ord a, Fractional a) ⇒ [a] → [a] → Int → Int → a → a
 rbasis ws knot i n u = (dat ^?! knotData . ix i . _2) * (ws ^?! ix i) / sum (zipWith (*) (dat ^.. knotData . each . _2) ws) where
 	dat = evalData n (makeData knot u)
 
-data NURBS f a = NURBS [Weight f a] [a] deriving (Eq, Ord, Read, Show)
-
-instance Functor f ⇒ Functor (NURBS f) where
-	fmap f (NURBS pts k) = NURBS (map (fmap f) pts) (map f k)
-
-instance Foldable f ⇒ Foldable (NURBS f) where
-	foldMap f (NURBS pts k) = mconcat (map (foldMap f) pts) `mappend` mconcat (map f k)
-
 -- | Evaluate nurbs point
 eval ∷ (Additive f, Ord a, Fractional a) ⇒ NURBS f a → a → f a
 eval n t = foldr (^+^) zero [rbasis ws knot i deg t *^ pt | (i, pt) ← zip [0..] pts] where
@@ -179,37 +139,61 @@ eval n t = foldr (^+^) zero [rbasis ws knot i deg t *^ pt | (i, pt) ← zip [0..
 	pts = n ^.. wpoints . each . wpoint
 	ws = n ^.. wpoints . each . weight
 
+-- [0.0 .. 1.0] divided on n parts
+unitRange ∷ Fractional a ⇒ Int → [a]
+unitRange n = [fromIntegral i / fromIntegral n | i ← [0 .. n]]
+
 -- | Generate knot of degree for points
 uniformKnot ∷ Fractional a ⇒ Int → Int → [a]
 uniformKnot deg pts = concat [
-	replicate (succ deg) 0,
-	[1 / fromIntegral (pts - deg) * fromIntegral i | i ← [1 .. pts - succ deg]],
-	replicate (succ deg) 1]
+	replicate deg 0,
+	unitRange (fromIntegral (pts - deg)),
+	replicate deg 1]
+
+-- | Generate cycle knot
+cycleKnot ∷ Fractional a ⇒ Int → [a]
+cycleKnot = unitRange
+
+-- | Cut first and last same knots
+cutKnot ∷ Int → [a] → [a]
+cutKnot deg k = drop deg (take (length k - deg) k)
+
+-- | Add first and last same knots
+extendKnot ∷ Int → [a] → [a]
+extendKnot deg k = replicate deg (k ^?! _head) ++ k ++ replicate deg (k ^?! _last)
 
 degree ∷ Fractional a ⇒ Lens' (NURBS f a) Int
 degree = lens fromn ton where
-	fromn (NURBS wpts k) = length k - length wpts - 1
-	ton n@(NURBS wpts _) d
-		| d ≥ length wpts = n
-		| d < 1 = n
-		| otherwise = NURBS wpts (uniformKnot d $ length wpts)
+	fromn (NURBS _ _ d) = d
+	ton n@(NURBS wpts k d) d'
+		| n ^. periodic = NURBS wpts k d'
+		| otherwise = NURBS wpts (extendKnot d' $ cutKnot d k) d'
+
+periodic ∷ Fractional a ⇒ Lens' (NURBS f a) Bool
+periodic = lens fromn ton where
+	fromn (NURBS wpts k _) = length k ≡ succ (length wpts)
+	ton n@(NURBS wpts k d) p
+		| (length k ≡ succ (length wpts)) ≡ p = n
+		| p = NURBS wpts (cycleKnot (length wpts)) d
+		| otherwise = NURBS wpts (uniformKnot d (length wpts)) d
 
 wpoints ∷ Fractional a ⇒ Lens (NURBS f a) (NURBS g a) [Weight f a] [Weight g a]
 wpoints = lens fromn ton where
-	fromn (NURBS wpts _) = wpts
-	ton n@(NURBS wpts k) wpts'
-		| length wpts ≡ length wpts' = NURBS wpts' k
-		| otherwise = NURBS wpts' (uniformKnot (view degree n) (length wpts'))
+	fromn (NURBS wpts _ _) = wpts
+	ton (NURBS wpts k d) wpts'
+		| length wpts ≡ length wpts' = NURBS wpts' k d
+		| otherwise = NURBS wpts' (uniformKnot d (length wpts')) d
 
 points ∷ (Additive f, Additive g, Fractional a) ⇒ Traversal (NURBS f a) (NURBS g a) (f a) (g a)
 points = wpoints . each . wpoint
 
 knotVector ∷ Eq a ⇒ Lens' (NURBS f a) [a]
 knotVector = lens fromn ton where
-	fromn (NURBS _ k) = k
-	ton n@(NURBS wpts _) k'
+	fromn (NURBS _ k _) = k
+	ton n@(NURBS wpts _ d) k'
+		| length k' ≡ succ (length wpts) = NURBS wpts k' d
 		| length k' > length wpts * 2 ∨ length k' < length wpts + 2 = n
-		| allSame (take (succ deg') k') ∧ allSame (take (succ deg') $ reverse k') = NURBS wpts k'
+		| allSame (take (succ deg') k') ∧ allSame (take (succ deg') $ reverse k') = NURBS wpts k' deg'
 		| otherwise = n
 		where
 			deg' = length k' - length wpts - 1
@@ -219,15 +203,18 @@ knotVector = lens fromn ton where
 
 iknotVector ∷ (Eq a, Fractional a) ⇒ Lens' (NURBS f a) [a]
 iknotVector = lens fromn ton where
-	fromn n@(NURBS _ k) = drop (n ^. degree + 1) $ take (length k - n^. degree - 1) k
-	ton n@(NURBS wpts k) k'
-		| length k' + 2 * (n ^. degree + 1) > length wpts * 2 ∨ length k' + 2 * (n ^. degree + 1) < length wpts + 2 = n
-		| otherwise = NURBS wpts (take (n ^. degree + 1) k ++  k' ++ take (n ^. degree + 1) (reverse k))
+	fromn n@(NURBS _ k _)
+		| n ^. periodic = k
+		| otherwise = cutKnot (n ^. degree) k
+	ton n@(NURBS wpts _ d) k'
+		| (n ^. periodic) ∧ length k' ≡ succ (length wpts) = set knotVector k' n
+		| length k' ≡ succ (length wpts - d) = set knotVector (extendKnot (n ^. degree) k') n
+		| otherwise = n
 
 knotSpan ∷ (Eq a, Fractional a) ⇒ Lens' (NURBS f a) (Span a)
 knotSpan = lens fromn ton where
-	fromn (NURBS _ k) = rangeSpan k
-	ton (NURBS wpts k) s = NURBS wpts (map (view norm') k) where
+	fromn (NURBS _ k _) = rangeSpan k
+	ton (NURBS wpts k d) s = NURBS wpts (map (view norm') k) d where
 		norm' = coords (rangeSpan k) ∘ from (coords s)
 
 normalizeKnot ∷ (Eq a, Fractional a) ⇒ NURBS f a → NURBS f a
@@ -239,21 +226,24 @@ nurbs deg pts = wnurbs deg (map (`ofWeight` 1) pts)
 
 -- | Make nurbs of degree from weighted points
 wnurbs ∷ (Additive f, Fractional a) ⇒ Int → [Weight f a] → NURBS f a
-wnurbs deg pts = NURBS pts (uniformKnot deg (length pts))
+wnurbs deg pts = NURBS pts (uniformKnot deg (length pts)) deg
 
 -- | Insert knot
 -- qᵢ₊₁ = fᵢ⋅pᵢ + (1-fᵢ)⋅pᵢ₊₁
--- q₀ = p₀ (f₋₁ ≡ 0)
--- qₙ₊₁ = pₙ (fₙ ≡ 1)
+-- q₀ = p₀ (f₋₁ ≡ 0) (non periodic nurbs)
+-- qₙ₊₁ = pₙ (fₙ ≡ 1) (non periodic nurbs)
 -- fᵢ, pᵢ, pᵢ₊₁ ↦ qᵢ₊₁
 insertKnot ∷ (Additive f, Ord a, Fractional a) ⇒ a → NURBS f a → NURBS f a
 insertKnot u n
-	| u ≤ head (n ^. knotVector) ∨ u ≥ last (n ^. knotVector) = error "Invalid knot value"
-	| otherwise = NURBS qs (sort $ u : (n ^. knotVector))
+	| not (u `inSpan` (n ^. knotSpan)) = error "Invalid knot value"
+	| otherwise = NURBS qs (sort $ u : (n ^. knotVector)) (n ^. degree)
 	where
 		wpts = n ^. wpoints
-		fs = map (fall u) $ fallSpans (n ^. degree) (n ^. knotVector)
-		qs = [head wpts] ++ zipWith3 lerp fs wpts (tail wpts) ++ [last wpts]
+		fs = map (cycleFall (spanLength (n ^. knotSpan)) u) $ take (length (n ^. wpoints)) $ knotSpans (pred (n ^. degree)) (n ^. knotVector)
+		-- find place to insert additional point
+		-- after last non null fall param
+		(growth, restart) = over (both . mapped . _1) snd $ span (uncurry (≤) ∘ fst) $ zip (zip (0.0 : fs) fs) (zip (last wpts : wpts) wpts)
+		qs = map (\(f, (prev, cur)) → lerp f prev cur) $ growth ++ (set _1 0.0 (last growth)) : restart
 
 -- | Insert knots
 insertKnots ∷ (Additive f, Ord a, Fractional a) ⇒ [(Int, a)] → NURBS f a → NURBS f a
@@ -261,29 +251,49 @@ insertKnots iu n = foldr ($) n $ concat [replicate i (insertKnot u) | (i, u) ←
 
 -- | Append point
 appendPoint ∷ (Eq a, Fractional a) ⇒ a → Weight f a → NURBS f a → NURBS f a
-appendPoint knot_end pt n = NURBS
-	(view wpoints n ++ [pt])
-	(take (succ $ length $ view wpoints n) (view knotVector n) ++ replicate (view degree n + 1) knot_end)
+appendPoint knot_end pt =
+	over nurbsPoints (++ [pt]) ∘
+	over nurbsKnoti (++ [knot_end])
 
 -- | Prepend point
 prependPoint ∷ (Eq a, Fractional a) ⇒ a → Weight f a → NURBS f a → NURBS f a
-prependPoint knot_start pt n = NURBS
-	(pt : view wpoints n)
-	(replicate (view degree n + 1) knot_start ++ drop (view degree n) (view knotVector n))
+prependPoint knot_start pt =
+	over nurbsPoints (pt :) ∘
+	over nurbsKnoti (knot_start :)
 
 -- | Split NURBS
 split ∷ (Additive f, Ord a, Fractional a) ⇒ a → NURBS f a → (NURBS f a, NURBS f a)
-split u n = (before, after) where
-	n' = foldr ($) n $ replicate (view degree n - existed) (insertKnot u)
-	before = NURBS (take (length bknots) $ view wpoints n') (bknots ++ replicate (view degree n' + 1) u) where
-		bknots = takeWhile (< u) (view knotVector n')
-	after = NURBS (drop (length (view wpoints n') - length aknots) $ view wpoints n') (replicate (view degree n' + 1) u ++ aknots) where
-		aknots = dropWhile (≤ u) (view knotVector n')
-	existed = length $ filter (≡ u) $ view knotVector n
+split u n
+	| n ^. periodic = error "Can't split periodic nurbs"
+	| otherwise = (before, after)
+	where
+		n' = insertKnots [(n ^. degree - existed, u)] n
+		before = NURBS (take (length bknots) $ view wpoints n') (bknots ++ replicate (view degree n' + 1) u) (n ^. degree) where
+			bknots = takeWhile (< u) (view knotVector n')
+		after = NURBS (drop (length (view wpoints n') - length aknots) $ view wpoints n') (replicate (view degree n' + 1) u ++ aknots) (n ^. degree) where
+			aknots = dropWhile (≤ u) (view knotVector n')
+		existed = length $ filter (≡ u) $ view knotVector n
 
 -- | Cut NURBS
 cut ∷ (Additive f, Ord a, Fractional a) ⇒ Span a → NURBS f a → NURBS f a
-cut (Span l h) = snd ∘ split l ∘ fst ∘ split h
+cut (Span l h) n
+	| not (n ^. periodic) = snd ∘ split l ∘ fst ∘ split h $ n
+	| otherwise = fst ∘ split h ∘ breakLoop l $ n
+
+-- | Break periodic NURBS at param
+breakLoop ∷ (Additive f, Ord a, Fractional a) ⇒ a → NURBS f a → NURBS f a
+breakLoop u n
+	| not (n ^. periodic) = error "Can't break not periodic nurbs"
+	| otherwise = NURBS (wpts' ++ [head wpts']) knot' (n ^. degree)
+	where
+		n' = insertKnots [(n ^. degree - existed, u)] n
+		existed = length $ filter (≡ u) $ n ^. knotVector
+		(knot_tail, knot_init) = break (≡ u) $ n' ^. knotVector . _init
+		knot' =
+			extendKnot (n' ^. degree) $
+				drop (pred $ n' ^. degree) knot_init ++
+				over each (+ (n' ^. knotSpan . spanEnd)) (knot_tail ++ [u])
+		wpts' = rotate (pred $ length knot_tail) (n' ^. wpoints)
 
 -- | Remove knot
 -- pᵢ₊₁ = (qᵢ₊₁ - fᵢ⋅pᵢ)/(1-fᵢ) = hᵢ⋅qᵢ₊₁ + (1-hᵢ)⋅pᵢ, where hᵢ = 1/(1-fᵢ) ∧ fᵢ ≢ 1
@@ -293,10 +303,11 @@ cut (Span l h) = snd ∘ split l ∘ fst ∘ split h
 -- hᵢ, qᵢ₊₁, pᵢ ↦ pᵢ₊₁
 removeKnot ∷ (Foldable f, Additive f, Ord a, Floating a, SimEq (NURBS f a)) ⇒ a → NURBS f a → Maybe (NURBS f a)
 removeKnot u n
+	| n ^. periodic = Nothing
 	| n' ≃ n = Just n'
 	| otherwise = Nothing
 	where
-		n' = NURBS (pts ++ drop (succ $ length pts) wpts) knots'
+		n' = NURBS (pts ++ drop (succ $ length pts) wpts) knots' (n ^. degree)
 		knots' = delete u $ n ^. knotVector
 		fs = map (fall u) $ fallSpans (n ^. degree) knots'
 		hs = takeWhile (> 0.0) [inv (1 - f) | f ← fs]
@@ -319,7 +330,10 @@ purgeKnot u n = fromMaybe n (purgeKnot u <$> removeKnot u n)
 
 -- | Try remove knots
 purgeKnots ∷ (Foldable f, Additive f, Ord a, Floating a, SimEq (NURBS f a)) ⇒ NURBS f a → NURBS f a
-purgeKnots n = foldr ($) n [removeKnot_ u | u ← n ^. iknotVector] where
+purgeKnots n = foldr ($) n [removeKnot_ u | u ← vs] where
+	vs
+		| n ^. periodic = n ^. knotVector
+		| otherwise = cutKnot (n ^. degree + 1) $ n ^. knotVector
 
 ndist ∷ (Metric f, Ord a, Floating a) ⇒ f a → f a → a
 ndist l r = distance l r / sqrt (max (norm l) (norm r))
@@ -354,7 +368,7 @@ instance (Metric f, Ord a, Floating a, SimEq (f a)) ⇒ SimEq (NURBS f a) where
 
 joint ∷ (Ord a, Num a, Floating a, Foldable f, Metric f, SimEq (Weight f a), SimEq (NURBS f a)) ⇒ NURBS f a → NURBS f a → Maybe (NURBS f a)
 joint l r
-	| (l ^?! wpoints . _last) ≃ (r ^?! wpoints . _head) ∧ (l ^. degree ≡ r ^. degree) = Just $ purgeKnot (l ^?! knotVector . _last) $ NURBS ((l ^. wpoints) ++ (r ^. wpoints . _tail)) knots'
+	| (l ^?! wpoints . _last) ≃ (r ^?! wpoints . _head) ∧ (l ^. degree ≡ r ^. degree) = Just $ purgeKnot (l ^?! knotVector . _last) $ NURBS ((l ^. wpoints) ++ (r ^. wpoints . _tail)) knots' (l ^. degree)
 	| otherwise = Nothing
 	where
 		knots' = (l ^. knotVector . _init) ++ over mapped moveKnot (r ^.. knotVector . _tail . dropping deg' each)
@@ -368,8 +382,7 @@ pline ∷ (Additive f, Fractional a) ⇒ [f a] → NURBS f a
 pline = nurbs 1
 
 circle ∷ (Eq a, Floating a) ⇒ V2 a → a → NURBS V2 a
-circle c r = over points move' $ set knotVector knot' $ wnurbs 2 [
-	V2 r 0 `ofWeight` 1,
+circle c r = over points move' $ set nurbsKnot knot' $ wnurbs 2 [
 	V2 r r `ofWeight` sq,
 	V2 0 r `ofWeight` 1,
 	V2 (-r) r `ofWeight` sq,
@@ -380,5 +393,9 @@ circle c r = over points move' $ set knotVector knot' $ wnurbs 2 [
 	V2 r 0 `ofWeight` 1]
 	where
 		sq = sqrt 2.0 / 2.0
-		knot' = [0, 0, 0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0]
+		knot' = [0, 0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0]
 		move' pt = pt ^+^ c
+
+rotate ∷ Int → [a] → [a]
+rotate n l = uncurry (flip (++)) $ splitAt n' l where
+	n' = until (≥ 0) (+ length l) n

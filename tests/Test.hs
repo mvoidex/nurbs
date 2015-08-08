@@ -28,6 +28,9 @@ test2 = nurbs 3 [
 	V2 0.0 (-40.0),
 	V2 20.0 20.0]
 
+ctest ∷ NURBS V2 Double
+ctest = set periodic True test
+
 main ∷ IO ()
 main = hspec $ do
 	describe "insert knot" $ do
@@ -52,3 +55,6 @@ main = hspec $ do
 			(cut (Span 0.0 1.0) <$> (test ⊕ test2)) ≃ Just test
 		it "should cut jointed nurbs" $
 			(cut (Span 1.0 2.0) <$> (test ⊕ test2)) ≃ Just test2
+	describe "periodic" $ do
+		it "can be broken into simple nurbs" $
+			breakLoop 0.0 ctest ≃ ctest

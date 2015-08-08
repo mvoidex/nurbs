@@ -1,5 +1,5 @@
 name:                nurbs
-version:             0.1.0.0
+version:             0.1.1.0
 synopsis:            NURBS
 description:         NURBS library
 homepage:            https://github.com/mvoidex/nurbs
@@ -14,6 +14,7 @@ cabal-version:       >=1.10
 library
   exposed-modules:
     Linear.NURBS
+    Linear.NURBS.Types
   build-depends:
     base >= 4.8 && < 5,
     base-unicode-symbols,
