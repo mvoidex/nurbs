@@ -242,6 +242,10 @@ wnurbs ∷ (Additive f, Fractional a) ⇒ Int → [Weight f a] → NURBS f a
 wnurbs deg pts = NURBS pts (uniformKnot deg (length pts))
 
 -- | Insert knot
+-- qᵢ₊₁ = fᵢ⋅pᵢ + (1-fᵢ)⋅pᵢ₊₁
+-- q₀ = p₀ (f₋₁ ≡ 0)
+-- qₙ₊₁ = pₙ (fₙ ≡ 1)
+-- fᵢ, pᵢ, pᵢ₊₁ ↦ qᵢ₊₁
 insertKnot ∷ (Additive f, Ord a, Fractional a) ⇒ a → NURBS f a → NURBS f a
 insertKnot u n
 	| u ≤ head (n ^. knotVector) ∨ u ≥ last (n ^. knotVector) = error "Invalid knot value"
@@ -282,6 +286,11 @@ cut ∷ (Additive f, Ord a, Fractional a) ⇒ Span a → NURBS f a → NURBS f a
 cut (Span l h) = snd ∘ split l ∘ fst ∘ split h
 
 -- | Remove knot
+-- pᵢ₊₁ = (qᵢ₊₁ - fᵢ⋅pᵢ)/(1-fᵢ) = hᵢ⋅qᵢ₊₁ + (1-hᵢ)⋅pᵢ, where hᵢ = 1/(1-fᵢ) ∧ fᵢ ≢ 1
+-- if fᵢ = 1 then pᵢ₊₁ = qᵢ₊₁
+-- p₀ = q₀ (h₋₁ ≡ 1)
+-- pₙ = qₙ₊₁ (hₙ ≡ ∞, fₙ ≡ 1)
+-- hᵢ, qᵢ₊₁, pᵢ ↦ pᵢ₊₁
 removeKnot ∷ (Foldable f, Additive f, Ord a, Floating a, SimEq (NURBS f a)) ⇒ a → NURBS f a → Maybe (NURBS f a)
 removeKnot u n
 	| n' ≃ n = Just n'
@@ -290,14 +299,9 @@ removeKnot u n
 		n' = NURBS (pts ++ drop (succ $ length pts) wpts) knots'
 		knots' = delete u $ n ^. knotVector
 		fs = map (fall u) $ fallSpans (n ^. degree) knots'
-		hs = takeWhile (> 0.0) $ 1 : [inv (1 - f) | f ← fs]
+		hs = takeWhile (> 0.0) [inv (1 - f) | f ← fs]
 		wpts = n ^. wpoints
-		pts = zipWith eval' qs hs_ where
-			qs = tail (inits wpts)
-			hs_ = tail (inits hs)
-			eval' qs' hs' = foldr (^+^) zero $ zipWith (*^) (map h' (tails hs')) qs'
-			h' [] = error "Impossible"
-			h' (hi : his) = hi * product [1 - hk | hk ← his]
+		pts = head wpts : zipWith3 lerp hs (tail wpts) pts
 		inv 0.0 = 0.0
 		inv x = 1.0 / x
 
