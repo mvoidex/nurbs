@@ -58,3 +58,5 @@ main = hspec $ do
 	describe "periodic" $ do
 		it "can be broken into simple nurbs" $
 			breakLoop 0.0 ctest ≃ ctest
+		it "can be broken in any place" $
+			uncurry (flip (⊕)) (split 0.5 (breakLoop 0.0 ctest)) ≃ Just (breakLoop 0.5 ctest)
