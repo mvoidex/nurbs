@@ -8,7 +8,7 @@ module Linear.NURBS (
 	KnotData(..), knotData, makeData, iterData, evalData,
 	basis, rbasis,
 	NURBS(..), eval, uniformKnot, degree, wpoints, points, knotVector, iknotVector, knotSpan, normalizeKnot, nurbs, wnurbs,
-	insertKnot, insertKnots, appendPoint, prependPoint, split, cut, removeKnot, removeKnot_, removeKnots, purgeKnots,
+	insertKnot, insertKnots, appendPoint, prependPoint, split, cut, removeKnot, removeKnot_, removeKnots, purgeKnot, purgeKnots,
 	ndist, SimEq(..),
 	joint, (⊕),
 
@@ -313,6 +313,10 @@ removeKnot_ u n = fromMaybe n $ removeKnot u n
 removeKnots ∷ (Foldable f, Additive f, Ord a, Floating a, SimEq (NURBS f a)) ⇒ [(Int, a)] → NURBS f a → NURBS f a
 removeKnots iu n = foldr ($) n $ concat [replicate i (removeKnot_ u) | (i, u) ← iu]
 
+-- | Try remove knot as much times as possible
+purgeKnot ∷ (Foldable f, Additive f, Ord a, Floating a, SimEq (NURBS f a)) ⇒ a → NURBS f a → NURBS f a
+purgeKnot u n = fromMaybe n (purgeKnot u <$> removeKnot u n)
+
 -- | Try remove knots
 purgeKnots ∷ (Foldable f, Additive f, Ord a, Floating a, SimEq (NURBS f a)) ⇒ NURBS f a → NURBS f a
 purgeKnots n = foldr ($) n [removeKnot_ u | u ← n ^. iknotVector] where
@@ -350,7 +354,7 @@ instance (Metric f, Ord a, Floating a, SimEq (f a)) ⇒ SimEq (NURBS f a) where
 
 joint ∷ (Ord a, Num a, Floating a, Foldable f, Metric f, SimEq (Weight f a), SimEq (NURBS f a)) ⇒ NURBS f a → NURBS f a → Maybe (NURBS f a)
 joint l r
-	| (l ^?! wpoints . _last) ≃ (r ^?! wpoints . _head) ∧ (l ^. degree ≡ r ^. degree) = Just $ purgeKnots $ NURBS ((l ^. wpoints) ++ (r ^. wpoints . _tail)) knots'
+	| (l ^?! wpoints . _last) ≃ (r ^?! wpoints . _head) ∧ (l ^. degree ≡ r ^. degree) = Just $ purgeKnot (l ^?! knotVector . _last) $ NURBS ((l ^. wpoints) ++ (r ^. wpoints . _tail)) knots'
 	| otherwise = Nothing
 	where
 		knots' = (l ^. knotVector . _init) ++ over mapped moveKnot (r ^.. knotVector . _tail . dropping deg' each)
