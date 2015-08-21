@@ -2,7 +2,7 @@ name:                nurbs
 version:             0.1.1.0
 synopsis:            NURBS
 description:
-  Simple NURBS library with support of NURBS, periodic NURBS, knot insertion/removal, NURBS split/joint
+  Simple NURBS library with support of NURBS, periodic NURBS, knot insertion-removal, NURBS split-joint
   .
   > import Control.Lens
   > import Linear.NURBS
