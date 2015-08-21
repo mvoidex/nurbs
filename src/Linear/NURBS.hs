@@ -8,7 +8,7 @@ module Linear.NURBS (
 	basis, rbasis,
 	eval, uniformKnot, cycleKnot, periodic, degree, wpoints, points, knotVector, iknotVector, knotSpan, normalizeKnot, nurbs, wnurbs,
 	insertKnot, insertKnots, appendPoint, prependPoint, split, cut, breakLoop, removeKnot, removeKnot_, removeKnots, purgeKnot, purgeKnots,
-	ndist, SimEq(..),
+	ndist, SimEq(..), simEq, simNeq,
 	joint, (⊕),
 
 	pline, circle,
