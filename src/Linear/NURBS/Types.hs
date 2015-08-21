@@ -14,18 +14,22 @@ import Linear.Vector hiding (basis)
 import Linear.Affine
 import Linear.Metric
 
+-- | Point with weight
 data Weight f a = Weight { _weightPoint ∷ f a, _weightValue ∷ a } deriving (Eq, Ord, Read, Show)
 
 makeLenses ''Weight
 
+-- | Make point with weight
 ofWeight ∷ Additive f ⇒ f a → a → Weight f a
 pt `ofWeight` w = Weight pt w
 
+-- | Weight lens
 weight ∷ (Additive f, Fractional a) ⇒ Lens' (Weight f a) a
 weight = lens fromw tow where
 	fromw (Weight _ w) = w
 	tow (Weight pt w) w' = Weight ((w' / w) *^ pt) w'
 
+-- | Point lens
 wpoint ∷ (Additive f, Additive g, Fractional a) ⇒ Lens (Weight f a) (Weight g a) (f a) (g a)
 wpoint = lens fromw tow where
 	fromw (Weight pt w) = (1.0 / w) *^ pt
@@ -57,6 +61,7 @@ instance Foldable f ⇒ Foldable (Weight f) where
 instance Metric f ⇒ Metric (Weight f) where
 	dot (Weight lx lw) (Weight rx rw) = dot lx rx + lw * rw	
 
+-- | Knot span
 data Span a = Span {
 	_spanStart ∷ a,
 	_spanEnd ∷ a }
@@ -76,7 +81,7 @@ instance Traversable Span where
 instance Show a ⇒ Show (Span a) where
 	show (Span s e) = show (s, e)
 
--- | Knot evaluation data
+-- | Knot evaluation data, used to compute basis functions
 data KnotData a = KnotData {
 	_knotDataAt ∷ a,
 	_knotDataSpan ∷ Span a,
@@ -85,6 +90,7 @@ data KnotData a = KnotData {
 
 makeLenses ''KnotData
 
+-- | NURBS
 data NURBS f a = NURBS {
 	_nurbsPoints ∷ [Weight f a],
 	_nurbsKnot ∷ [a],

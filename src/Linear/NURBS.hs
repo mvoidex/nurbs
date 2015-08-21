@@ -28,11 +28,13 @@ import Linear.V2
 
 import Linear.NURBS.Types
 
+-- | Binomial coefficients
 binomial ∷ Integral a ⇒ a → a → a
 binomial n k
 	| k > n ∨ k < 0 = 0
 	| otherwise = product [k + 1 .. n] `div` product [1 .. n - k]
 
+-- | Size of vector
 size ∷ (Additive f, Floating a, Foldable f) ⇒ f a → a
 size = sqrt ∘ sum ∘ fmap (^ (2 ∷ Integer))
 
@@ -42,12 +44,15 @@ spanId u s
 	| u `inSpan` s = 1
 	| otherwise = 0
 
+-- | Is span empty
 spanEmpty ∷ Eq a ⇒ Span a → Bool
 spanEmpty (Span s e) = s ≡ e
 
+-- | Check whether value in span
 inSpan ∷ Ord a ⇒ a → Span a → Bool
 x `inSpan` Span s e = x ≥ s ∧ x ≤ e
 
+-- | Span length
 spanLength ∷ Num a ⇒ Span a → a
 spanLength (Span s e) = e - s
 
@@ -71,6 +76,7 @@ fall u s = 1 - grow u s
 cycleGrow ∷ (Ord a, Fractional a) ⇒ a → a → Span a → a
 cycleGrow per u s = grow (until (≥ (s ^. spanStart)) (+ per) u) s
 
+-- | Fall within span from 1 to 0, periodic
 cycleFall ∷ (Ord a, Fractional a) ⇒ a → a → Span a → a
 cycleFall per u s = fall (until (≥ (s ^. spanStart)) (+ per) u) s
 
@@ -103,6 +109,7 @@ growSpans d = knotSpans (pred d) ∘ init
 fallSpans ∷ Num a ⇒ Int → [a] → [Span a]
 fallSpans d = knotSpans (pred d) ∘ tail
 
+-- | Span of knot data
 dataSpan ∷ (Eq a, Fractional a) ⇒ Lens' (KnotData a) (Span a)
 dataSpan = lens fromk tok where
 	fromk (KnotData _ s _) = s
@@ -162,6 +169,7 @@ cutKnot deg k = drop deg (take (length k - deg) k)
 extendKnot ∷ Int → [a] → [a]
 extendKnot deg k = replicate deg (k ^?! _head) ++ k ++ replicate deg (k ^?! _last)
 
+-- | NURBS degree
 degree ∷ Fractional a ⇒ Lens' (NURBS f a) Int
 degree = lens fromn ton where
 	fromn (NURBS _ _ d) = d
@@ -169,6 +177,7 @@ degree = lens fromn ton where
 		| n ^. periodic = NURBS wpts k d'
 		| otherwise = NURBS wpts (extendKnot d' $ cutKnot d k) d'
 
+-- | Is NURBS periodic
 periodic ∷ Fractional a ⇒ Lens' (NURBS f a) Bool
 periodic = lens fromn ton where
 	fromn (NURBS wpts k _) = length k ≡ succ (length wpts)
@@ -177,6 +186,7 @@ periodic = lens fromn ton where
 		| p = NURBS wpts (cycleKnot (length wpts)) d
 		| otherwise = NURBS wpts (uniformKnot d (length wpts)) d
 
+-- | NURBS points with weights
 wpoints ∷ Fractional a ⇒ Lens (NURBS f a) (NURBS g a) [Weight f a] [Weight g a]
 wpoints = lens fromn ton where
 	fromn (NURBS wpts _ _) = wpts
@@ -184,9 +194,11 @@ wpoints = lens fromn ton where
 		| length wpts ≡ length wpts' = NURBS wpts' k d
 		| otherwise = NURBS wpts' (uniformKnot d (length wpts')) d
 
+-- | NURBS points without weights
 points ∷ (Additive f, Additive g, Fractional a) ⇒ Traversal (NURBS f a) (NURBS g a) (f a) (g a)
 points = wpoints . each . wpoint
 
+-- | NURBS knot vector
 knotVector ∷ Eq a ⇒ Lens' (NURBS f a) [a]
 knotVector = lens fromn ton where
 	fromn (NURBS _ k _) = k
@@ -211,12 +223,14 @@ iknotVector = lens fromn ton where
 		| length k' ≡ succ (length wpts - d) = set knotVector (extendKnot (n ^. degree) k') n
 		| otherwise = n
 
+-- | NURBS knot span
 knotSpan ∷ (Eq a, Fractional a) ⇒ Lens' (NURBS f a) (Span a)
 knotSpan = lens fromn ton where
 	fromn (NURBS _ k _) = rangeSpan k
 	ton (NURBS wpts k d) s = NURBS wpts (map (view norm') k) d where
 		norm' = coords (rangeSpan k) ∘ from (coords s)
 
+-- | Scale NURBS params to ∈ [0, 1]
 normalizeKnot ∷ (Eq a, Fractional a) ⇒ NURBS f a → NURBS f a
 normalizeKnot = set knotSpan (Span 0 1)
 
@@ -335,6 +349,7 @@ purgeKnots n = foldr ($) n [removeKnot_ u | u ← vs] where
 		| n ^. periodic = n ^. knotVector
 		| otherwise = cutKnot (n ^. degree + 1) $ n ^. knotVector
 
+-- | Distance between points
 ndist ∷ (Metric f, Ord a, Floating a) ⇒ f a → f a → a
 ndist l r = distance l r / sqrt (max (norm l) (norm r))
 
@@ -343,6 +358,12 @@ class SimEq a where
 	x ≃ y = not (x ≄ y)
 	(≄) ∷ a → a → Bool
 	x ≄ y = not (x ≃ y)
+
+simEq ∷ SimEq a ⇒ a → a → Bool
+simEq = (≃)
+
+simNeq ∷ SimEq a ⇒ a → a → Bool
+simNeq = (≄)
 
 instance SimEq a ⇒ SimEq (Maybe a) where
 	Just x ≃ Just y = x ≃ y
@@ -366,6 +387,7 @@ instance (Metric f, Ord a, Floating a, SimEq (f a)) ⇒ SimEq (NURBS f a) where
 		i = max (length (x ^. wpoints)) (length (y ^. wpoints)) * 4
 		norm' n = maximum $ map norm (n ^. wpoints)
 
+-- | Try to joint two NURBS
 joint ∷ (Ord a, Num a, Floating a, Foldable f, Metric f, SimEq (Weight f a), SimEq (NURBS f a)) ⇒ NURBS f a → NURBS f a → Maybe (NURBS f a)
 joint l r
 	| (l ^?! wpoints . _last) ≃ (r ^?! wpoints . _head) ∧ (l ^. degree ≡ r ^. degree) = Just $ purgeKnot (l ^?! knotVector . _last) $ NURBS ((l ^. wpoints) ++ (r ^. wpoints . _tail)) knots' (l ^. degree)
@@ -375,12 +397,15 @@ joint l r
 		deg' = l ^. degree
 		moveKnot k = k - (r ^?! knotVector . _head) + (l ^?! knotVector . _last)
 
+-- | Joint
 (⊕) ∷ (Ord a, Num a, Floating a, Foldable f, Metric f, SimEq (Weight f a), SimEq (NURBS f a)) ⇒ NURBS f a → NURBS f a → Maybe (NURBS f a)
 l ⊕ r = joint l r
 
+-- | Make pline NURBS
 pline ∷ (Additive f, Fractional a) ⇒ [f a] → NURBS f a
 pline = nurbs 1
 
+-- | Make circle NURBS
 circle ∷ (Eq a, Floating a) ⇒ V2 a → a → NURBS V2 a
 circle c r = over points move' $ set nurbsKnot knot' $ wnurbs 2 [
 	V2 r r `ofWeight` sq,
