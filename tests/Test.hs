@@ -7,6 +7,7 @@ import Linear.NURBS
 import Linear.V2
 import Test.Hspec
 
+-- | Simple NURBS of degree 3
 test₁ ∷ NURBS V2 Double
 test₁ = nurbs 3 [
 	V2 0.0 0.0,
@@ -16,6 +17,7 @@ test₁ = nurbs 3 [
 	V2 0.0 20.0,
 	V2 (-20.0) 0.0]
 
+-- | Another NURBS of degree 3
 test₂ ∷ NURBS V2 Double
 test₂ = nurbs 3 [
 	V2 (-20.0) 0.0,
@@ -23,6 +25,7 @@ test₂ = nurbs 3 [
 	V2 0.0 (-40.0),
 	V2 20.0 20.0]
 
+-- | Make test₁ periodic
 testₒ ∷ NURBS V2 Double
 testₒ = set periodic True test₁
 
