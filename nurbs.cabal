@@ -71,7 +71,7 @@ license:             BSD3
 license-file:        LICENSE
 author:              Alexanrd `voidex` Ruchkin
 maintainer:          voidex@live.com
-category:            Math
+category:            Math, Geometry, Linear Algebra
 build-type:          Simple
 cabal-version:       >=1.10
 
