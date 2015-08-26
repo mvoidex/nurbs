@@ -26,8 +26,8 @@ test₂ = nurbs 3 [
 	V2 20.0 20.0]
 
 -- | Make test₁ periodic
-testₒ ∷ NURBS V2 Double
-testₒ = set periodic True test₁
+test₀ ∷ NURBS V2 Double
+test₀ = set periodic True test₁
 
 main ∷ IO ()
 main = hspec $ do
@@ -60,6 +60,6 @@ main = hspec $ do
 			(cut (Span 1.0 2.0) <$> (test₁ ⊕ test₂)) ≃ Just test₂
 	describe "periodic" $ do
 		it "can be broken into simple nurbs" $
-			breakLoop 0.0 testₒ ≃ testₒ
+			breakLoop 0.0 test₀ ≃ test₀
 		it "can be broken in any place" $
-			uncurry (flip (⊕)) (split 0.5 (breakLoop 0.0 testₒ)) ≃ Just (breakLoop 0.5 testₒ)
+			uncurry (flip (⊕)) (split 0.5 (breakLoop 0.0 test₀)) ≃ Just (breakLoop 0.5 test₀)
