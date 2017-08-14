@@ -86,7 +86,7 @@ library
     linear >= 1.19,
     mtl >= 2.2
   hs-source-dirs: src
-  ghc-options: -threaded -Wall -fno-warn-tabs
+  ghc-options: -Wall -fno-warn-tabs
   default-language: Haskell2010
   default-extensions: UnicodeSyntax
 
